@@ -5,6 +5,10 @@ from matplotlib.patches import Polygon
 import matplotlib.pyplot as plt
 
 
+ORDERED_COLLECT_INDEXES = [5, 2, 6, 3, 8, 10, 9, 12, 11,
+                           4, 8, 10, 9, 4, 5, 6, 3, 11]
+
+
 TERRAIN_TYPES = pd.DataFrame(['clay', 'sheep', 'ore', 'wheat',
                               'wood', 'desert',
                               'clay_port', 'sheep_port',
@@ -239,7 +243,8 @@ def shuffle_regions(df_hexes, inplace=False):
     #return axis
 
 
-def plot_hexes(df_nodes, df_hexes, axis=None, colorby='terrain'):
+def plot_hexes(df_nodes, df_hexes, axis=None, labelby='node',
+               colorby='terrain'):
     if axis is None:
         fig, axis = plt.subplots(figsize=(8, 6))
 
@@ -272,6 +277,87 @@ def plot_hexes(df_nodes, df_hexes, axis=None, colorby='terrain'):
         poly = Polygon(df_i[['x', 'y']].values, facecolor=color, alpha=alpha)
         axis.add_patch(poly)
         center = df_i[['x', 'y']].mean()
-        axis.text(center.x, center.y, str(hex_i), ha='center', va='center')
+
+        text_kwargs = {'fontsize': 14}
+        if labelby == 'node':
+            # Label each hex using hex index.
+            label = str(hex_i)
+        elif labelby == 'collect_index':
+            # Label each land hex using collect index (i.e., dice number), and
+            # each port based on trade ratio.
+            label = (int(hex_info.collect_index)
+                     if (hex_info.collect_index == hex_info.collect_index)
+                     else '')
+            if label in (6, 8):
+                text_kwargs['fontweight'] = 'bold'
+            elif label in (2, 12):
+                text_kwargs['fontsize'] = 10
+            elif hex_info.region == 'port':
+                if hex_info.terrain == 'three_to_one_port':
+                    label = '3:1'
+                else:
+                    label = '2:1'
+        else:
+            raise ValueError('Invalid hex attribute to label by.  Must be '
+                             'either "node" or "collect_index" (not %s)' %
+                             labelby)
+        axis.text(center.x, center.y, label, ha='center', va='center',
+                  **text_kwargs)
     axis.set_aspect(True)
     return axis
+
+
+def get_hex_roll_order(clockwise=True, shift=0):
+    '''
+    Return list of ordered hex indexes, representing order in which
+    dice roll numbers should be assigned.
+
+    Arguments
+    ---------
+
+     - `clockwise`: If `True`, assign dice numbers in clockwise order
+       starting from outer ring of hexes.  Otherwise, assign in
+       counter-clockwise order.
+     - `shift`: Controls starting outer hex.
+    '''
+    inner_ring = pd.DataFrame([[32, 40], [41, 42], [35, 20],
+                               [20, 12], [11, 10], [17, 32]],
+                              index=[33, 34, 27, 19, 18, 25],
+                              columns=['clockwise',
+                                       'counter_clockwise',
+                                       # 'clockwise',
+                                      ])
+    outer_ring = [32, 40, 41, 42, 35, 28, 20, 12, 11, 10, 17, 24]
+
+    inner_sequence = np.roll(inner_ring.index, shift)
+
+    if clockwise:
+        inner_sequence = inner_sequence[::-1]
+
+    if clockwise:
+        outer_sequence = outer_ring[::-1]
+        outer_start = inner_ring.loc[inner_sequence[-1]].clockwise
+    else:
+        outer_sequence = outer_ring[:]
+        outer_start = inner_ring.loc[inner_sequence[-1]].counter_clockwise
+    outer_sequence = np.roll(outer_sequence,
+                             -outer_sequence.index(outer_start))
+
+    return np.concatenate([[26], inner_sequence, outer_sequence])[::-1]
+
+
+def assign_collect_index(df_hexes, hex_roll_order, inplace=False):
+    # Land hexes in collect assignment order.
+    # __N.B.,__ The desert tile is *not* assigned a roll number.
+    df_land_hexes = df_hexes.loc[hex_roll_order].copy()
+    df_land_hexes.loc[df_land_hexes.terrain != 'desert',
+                      'collect_index'] = ORDERED_COLLECT_INDEXES
+    df_land_hexes.loc[df_land_hexes.terrain == 'desert',
+                      'collect_index'] = np.NaN
+    if not inplace:
+        df_hexes = df_hexes.copy()
+    if 'collect_index' in df_hexes:
+        df_hexes.drop('collect_index', axis=1, inplace=True)
+    df_hexes['collect_index'] = df_land_hexes['collect_index']
+    if not inplace:
+        return df_hexes
