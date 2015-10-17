@@ -5,6 +5,7 @@ from matplotlib.patches import Polygon
 import matplotlib.pyplot as plt
 
 
+CENTER_HEX_INDEX = 26
 ORDERED_COLLECT_INDEXES = [5, 2, 6, 3, 8, 10, 9, 12, 11,
                            4, 8, 10, 9, 4, 5, 6, 3, 11]
 
@@ -243,12 +244,69 @@ def shuffle_regions(df_hexes, inplace=False):
     #return axis
 
 
+def get_hex_roll_order(clockwise=True, shift=0):
+    '''
+    Return list of ordered hex indexes, representing order in which
+    dice roll numbers should be assigned.
+
+    Arguments
+    ---------
+
+     - `clockwise`: If `True`, assign dice numbers in clockwise order
+       starting from outer ring of hexes.  Otherwise, assign in
+       counter-clockwise order.
+     - `shift`: Controls starting outer hex.
+    '''
+    inner_ring = pd.DataFrame([[32, 40], [41, 42], [35, 20],
+                               [20, 12], [11, 10], [17, 32]],
+                              index=[33, 34, 27, 19, 18, 25],
+                              columns=['clockwise',
+                                       'counter_clockwise',
+                                       # 'clockwise',
+                                      ])
+    outer_ring = [32, 40, 41, 42, 35, 28, 20, 12, 11, 10, 17, 24]
+
+    inner_sequence = np.roll(inner_ring.index, shift)
+
+    if clockwise:
+        inner_sequence = inner_sequence[::-1]
+
+    if clockwise:
+        outer_sequence = outer_ring[::-1]
+        outer_start = inner_ring.loc[inner_sequence[-1]].clockwise
+    else:
+        outer_sequence = outer_ring[:]
+        outer_start = inner_ring.loc[inner_sequence[-1]].counter_clockwise
+    outer_sequence = np.roll(outer_sequence,
+                             -outer_sequence.index(outer_start))
+
+    return np.concatenate([[26], inner_sequence, outer_sequence])[::-1]
+
+
+def assign_collect_index(df_hexes, hex_roll_order, inplace=False):
+    # Land hexes in collect assignment order.
+    # __N.B.,__ The desert tile is *not* assigned a roll number.
+    df_land_hexes = df_hexes.loc[hex_roll_order].copy()
+    df_land_hexes.loc[df_land_hexes.terrain != 'desert',
+                      'collect_index'] = ORDERED_COLLECT_INDEXES
+    df_land_hexes.loc[df_land_hexes.terrain == 'desert',
+                      'collect_index'] = np.NaN
+    if not inplace:
+        df_hexes = df_hexes.copy()
+    if 'collect_index' in df_hexes:
+        df_hexes.drop('collect_index', axis=1, inplace=True)
+    df_hexes['collect_index'] = df_land_hexes['collect_index']
+    if not inplace:
+        return df_hexes
+
+
 def plot_hexes(df_nodes, df_hexes, axis=None, labelby='node',
                colorby='terrain'):
     if axis is None:
         fig, axis = plt.subplots(figsize=(8, 6))
 
-    df_nodes.plot(kind='scatter', x='x', y='y', ax=axis)
+    df_nodes.dropna().plot(kind='scatter', x='x', y='y', ax=axis,
+                           s=10 ** 2)
 
     df_hex_paths = get_hex_paths(df_nodes)
 
@@ -307,57 +365,33 @@ def plot_hexes(df_nodes, df_hexes, axis=None, labelby='node',
     return axis
 
 
-def get_hex_roll_order(clockwise=True, shift=0):
+def mark_port_nodes(df_nodes, df_hexes, df_hex_paths, inplace=False):
     '''
-    Return list of ordered hex indexes, representing order in which
-    dice roll numbers should be assigned.
+    Find the pair of nodes associated with each port.
 
-    Arguments
-    ---------
-
-     - `clockwise`: If `True`, assign dice numbers in clockwise order
-       starting from outer ring of hexes.  Otherwise, assign in
-       counter-clockwise order.
-     - `shift`: Controls starting outer hex.
+    Some port hexes may have more than two vertices (i.e., nodes) contacting
+    adjacent land hexes.  In such cases, according to the rules, only two nodes
+    must be selected, which are on the side of the hex port facing the most
+    (i.e., 4 instead of 3) land hexes.
     '''
-    inner_ring = pd.DataFrame([[32, 40], [41, 42], [35, 20],
-                               [20, 12], [11, 10], [17, 32]],
-                              index=[33, 34, 27, 19, 18, 25],
-                              columns=['clockwise',
-                                       'counter_clockwise',
-                                       # 'clockwise',
-                                      ])
-    outer_ring = [32, 40, 41, 42, 35, 28, 20, 12, 11, 10, 17, 24]
-
-    inner_sequence = np.roll(inner_ring.index, shift)
-
-    if clockwise:
-        inner_sequence = inner_sequence[::-1]
-
-    if clockwise:
-        outer_sequence = outer_ring[::-1]
-        outer_start = inner_ring.loc[inner_sequence[-1]].clockwise
-    else:
-        outer_sequence = outer_ring[:]
-        outer_start = inner_ring.loc[inner_sequence[-1]].counter_clockwise
-    outer_sequence = np.roll(outer_sequence,
-                             -outer_sequence.index(outer_start))
-
-    return np.concatenate([[26], inner_sequence, outer_sequence])[::-1]
-
-
-def assign_collect_index(df_hexes, hex_roll_order, inplace=False):
-    # Land hexes in collect assignment order.
-    # __N.B.,__ The desert tile is *not* assigned a roll number.
-    df_land_hexes = df_hexes.loc[hex_roll_order].copy()
-    df_land_hexes.loc[df_land_hexes.terrain != 'desert',
-                      'collect_index'] = ORDERED_COLLECT_INDEXES
-    df_land_hexes.loc[df_land_hexes.terrain == 'desert',
-                      'collect_index'] = np.NaN
     if not inplace:
-        df_hexes = df_hexes.copy()
-    if 'collect_index' in df_hexes:
-        df_hexes.drop('collect_index', axis=1, inplace=True)
-    df_hexes['collect_index'] = df_land_hexes['collect_index']
+        df_nodes = df_nodes.copy()
+
+    # Compute center position of board
+    center = df_hex_paths.loc[df_hex_paths.hex == CENTER_HEX_INDEX, ['x', 'y']].mean()
+
+    # Compute distance from each node (i.e., hex vertex) to center of the board.
+    nodes_to_center = np.sqrt(((df_nodes[['x', 'y']] - center) ** 2).sum(axis=1))
+    df_hex_links = get_hex_links(df_nodes)
+    df_hex_links['region'] = df_hexes.loc[df_hex_links.hex, 'region'].values
+    df_hex_links['distance_to_center'] = nodes_to_center.loc[df_hex_links['node']].values
+
+    # Get two vertices of each port hex that are closest to the center of the island.
+    df_port_nodes = (df_hex_links.loc[df_hex_links.region == 'port']
+                     .sort(['hex', 'distance_to_center'])
+                     .groupby('hex').head(2)[['hex', 'node']])
+    df_nodes['port_hex'] = np.NaN
+    df_nodes.loc[df_port_nodes.node, 'port_hex'] = df_port_nodes.hex.values
+
     if not inplace:
-        return df_hexes
+        return df_nodes
