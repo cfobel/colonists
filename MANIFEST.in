@@ -1,0 +1,12 @@
+include COPYING
+include README.md
+include RELEASE-VERSION
+include version.py
+include pavement.py
+include paver-minilib.zip
+include setup.py
+recursive-include colonists *
+recursive-exclude colonists *.pyc
+recursive-exclude colonists *.o
+recursive-exclude colonists *~
+recursive-exclude colonists .ipynb_checkpoints

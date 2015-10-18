@@ -1,0 +1,11 @@
+*~
+*.pyc
+RELEASE-VERSION
+MANIFEST
+setup.py
+.ropeproject
+.ipynb_checkpoints
+*.egg-info
+dist
+build
+paver-minilib.zip
